@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import asyncio
 
-from ...core.model_manager import ModelManager, ModelInfo, ModelType, ModelStatus
+from src.core.custom_model_manager import CustomModelManager, LocalModelInfo, ModelType, ModelStatus
 
 router = APIRouter()
 
@@ -35,8 +35,8 @@ class ModelLoadRequest(BaseModel):
     force: bool = Field(default=False)
     priority: int = Field(default=5, ge=1, le=10)
 
-async def get_model_manager(request: Request) -> ModelManager:
-    """Dependency to get model manager"""
+async def get_model_manager(request: Request) -> CustomModelManager:
+    """Dependency to get custom model manager"""
     return request.app.state.model_manager
 
 @router.get("/", response_model=ModelListResponse)
@@ -44,7 +44,7 @@ async def list_models(
     model_type: Optional[str] = None,
     status: Optional[str] = None,
     provider: Optional[str] = None,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """List all available models with filtering options"""
     
@@ -92,7 +92,7 @@ async def list_models(
 @router.get("/{model_name}/status", response_model=ModelStatusResponse)
 async def get_model_status(
     model_name: str,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Get detailed status of a specific model"""
     
@@ -119,7 +119,7 @@ async def load_model(
     model_name: str,
     request: ModelLoadRequest,
     background_tasks: BackgroundTasks,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Load a specific model"""
     
@@ -138,7 +138,7 @@ async def load_model(
 @router.post("/{model_name}/unload")
 async def unload_model(
     model_name: str,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Unload a specific model to free VRAM"""
     
@@ -151,7 +151,7 @@ async def unload_model(
 @router.post("/switch", response_model=Dict[str, Any])
 async def switch_model(
     request: ModelSwitchRequest,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Switch to a different model"""
     
@@ -173,7 +173,7 @@ async def recommend_model(
     task_type: str = "chat",
     language: str = "en",
     complexity: str = "medium",
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Get model recommendation for a specific task"""
     
@@ -209,7 +209,7 @@ async def recommend_model(
 
 @router.get("/status/system")
 async def get_system_status(
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Get comprehensive system and model status"""
     
@@ -219,7 +219,7 @@ async def get_system_status(
 @router.post("/optimize")
 async def optimize_models(
     target_vram_percentage: float = Field(default=80.0, ge=50.0, le=95.0),
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Optimize model loading based on VRAM usage"""
     
@@ -264,7 +264,7 @@ async def optimize_models(
 
 @router.post("/refresh")
 async def refresh_model_list(
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Refresh the list of available models"""
     
@@ -288,7 +288,7 @@ async def refresh_model_list(
 
 @router.get("/performance/metrics")
 async def get_performance_metrics(
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Get detailed performance metrics for all models"""
     

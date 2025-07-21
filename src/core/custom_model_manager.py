@@ -66,13 +66,16 @@ class LocalModelInfo:
     tokenizer_path: Optional[str] = None
     config_path: Optional[str] = None
     size_gb: float = 0.0
-    vram_usage: float = 0.0
+    load_time: float = 0.0
     status: ModelStatus = ModelStatus.UNLOADED
     last_used: float = field(default_factory=time.time)
     generation_config: Dict[str, Any] = field(default_factory=dict)
     custom_settings: Dict[str, Any] = field(default_factory=dict)
     performance_metrics: Dict[str, float] = field(default_factory=dict)
-
+    provider: str = "local"
+    specialties: List[str] = field(default_factory=list)
+    languages: List[str] = field(default_factory=list)
+    config: Dict[str, Any] = field(default_factory=dict)
 class CustomModelManager:
     """
     Custom Model Manager - Toàn quyền kiểm soát models
@@ -89,12 +92,16 @@ class CustomModelManager:
         self.loaded_models: Dict[str, Dict[str, Any]] = {}
         self.model_registry: Dict[str, LocalModelInfo] = {}
         self.training_jobs: Dict[str, Any] = {}
-        
+        self.active_model: Optional[str] = None
+        self.request_counts: Dict[str, int] = {}
+        self.response_times: Dict[str, List[float]] = {}
+
         # RTX 4060 Ti 16GB optimization
         self.total_vram = 16 * 1024  # 16GB in MB
         self.max_vram_usage = 0.85   # Use max 85% = ~13.6GB
         self.reserved_vram = 2 * 1024  # Reserve 2GB for system
-        
+        self.max_vram = self.total_vram
+
         # Local model paths
         self.local_models_dir = Path("local_models")
         self.chat_models_dir = self.local_models_dir / "chat_models"
@@ -154,8 +161,12 @@ class CustomModelManager:
         except Exception as e:
             logger.error(f"❌ Failed to register {model_path}: {e}")
     
-    async def get_available_models(self) -> List[Dict[str, Any]]:
-        """Get list of all available local models"""
+    async def get_available_models(self) -> Dict[str, LocalModelInfo]:
+        """Return mapping of model name to info"""
+        return self.model_registry.copy()
+
+    async def list_available_models(self) -> List[Dict[str, Any]]:
+        """Get list of models as dictionaries"""
         models = []
         for name, info in self.model_registry.items():
             models.append({
@@ -164,7 +175,7 @@ class CustomModelManager:
                 "size_gb": info.size_gb,
                 "status": info.status.value,
                 "vram_usage": info.vram_usage,
-                "local_path": info.local_path
+                "local_path": info.local_path,
             })
         return models
     
@@ -240,8 +251,11 @@ class CustomModelManager:
             model_info.status = ModelStatus.LOADED
             model_info.vram_usage = self._get_model_vram_usage(model)
             model_info.last_used = time.time()
-            
+            model_info.load_time = self.loaded_models[model_name]["load_time"]
+
             logger.info(f"✅ {model_name} loaded successfully ({model_info.vram_usage:.1f}MB VRAM)")
+            self.active_model = model_name
+
             return True
             
         except Exception as e:
@@ -269,6 +283,10 @@ class CustomModelManager:
             if model_name in self.model_registry:
                 self.model_registry[model_name].status = ModelStatus.UNLOADED
                 self.model_registry[model_name].vram_usage = 0.0
+                
+            if self.active_model == model_name:
+                self.active_model = None
+            
             
             logger.info(f"🗑️ Model {model_name} unloaded")
             return True
@@ -325,7 +343,32 @@ class CustomModelManager:
         except Exception as e:
             logger.error(f"❌ Generation failed for {model_name}: {e}")
             raise
-    
+
+    async def switch_model(self, model_name: str) -> bool:
+        """Switch active model, loading if necessary"""
+        if self.active_model == model_name:
+            return True
+
+        if self.active_model:
+            await self.unload_model(self.active_model)
+
+        success = await self.load_model(model_name)
+        if success:
+            self.active_model = model_name
+        return success
+
+    async def get_best_model_for_task(
+        self,
+        task_type: str,
+        language: str = "en",
+        complexity: str = "medium",
+    ) -> Optional[str]:
+        """Simple heuristic for selecting a model"""
+        for name, info in self.model_registry.items():
+            if info.model_type.value == task_type:
+                return name
+        # fallback to any model
+        return next(iter(self.model_registry.keys()), None)
     async def start_training(
         self,
         model_name: str,
@@ -484,6 +527,52 @@ class CustomModelManager:
         except:
             return 0.0
     
+
+
+    def record_request(self, model_name: str, response_time: float):
+        """Record request statistics"""
+        if model_name not in self.request_counts:
+            self.request_counts[model_name] = 0
+            self.response_times[model_name] = []
+
+        self.request_counts[model_name] += 1
+        self.response_times[model_name].append(response_time)
+
+        if len(self.response_times[model_name]) > 100:
+            self.response_times[model_name] = self.response_times[model_name][-100:]
+
+    def _get_performance_stats(self) -> Dict[str, Any]:
+        """Aggregate performance statistics"""
+        stats = {}
+        for name, times in self.response_times.items():
+            if times:
+                stats[name] = {
+                    "avg_response_time": sum(times) / len(times),
+                    "min_response_time": min(times),
+                    "max_response_time": max(times),
+                    "request_count": self.request_counts.get(name, 0),
+                }
+        return stats
+
+    async def get_status(self) -> Dict[str, Any]:
+        """Get high level system status"""
+        system = await self.get_system_status()
+        gpu = system.get("gpu", {})
+
+        return {
+            "status": "operational",
+            "active_model": self.active_model,
+            "loaded_models": list(self.loaded_models.keys()),
+            "total_models": len(self.model_registry),
+            "vram_usage": {
+                "current_gb": gpu.get("memory_used", 0) / 1024,
+                "max_gb": gpu.get("memory_total", 0) / 1024,
+                "percentage": (gpu.get("memory_used", 0) / gpu.get("memory_total", 1)) * 100 if gpu.get("memory_total") else 0,
+            },
+            "performance": self._get_performance_stats(),
+        }
+    
+
     async def get_system_status(self) -> Dict[str, Any]:
         """Get system resource status"""
         try:

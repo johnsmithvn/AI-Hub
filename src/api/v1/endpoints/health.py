@@ -8,9 +8,9 @@ from typing import Dict, Any
 import psutil
 import time
 
-from ...core.model_manager import ModelManager
-from ...core.database import check_db_health
-from ...core.redis_client import check_redis_health
+from src.core.custom_model_manager import CustomModelManager
+from src.core.database import check_db_health
+from src.core.redis_client import check_redis_health
 
 router = APIRouter()
 
@@ -22,13 +22,13 @@ class HealthResponse(BaseModel):
     services: Dict[str, Any]
     system: Dict[str, Any]
 
-async def get_model_manager(request: Request) -> ModelManager:
-    """Dependency to get model manager"""
+async def get_model_manager(request: Request) -> CustomModelManager:
+    """Dependency to get custom model manager"""
     return request.app.state.model_manager
 
 @router.get("/", response_model=HealthResponse)
 async def health_check(
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Comprehensive health check"""
     

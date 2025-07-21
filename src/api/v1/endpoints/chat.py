@@ -1,14 +1,4 @@
-"""
-Chat endpoints witasync def get_model_manager_dep(request: Request):
-    """Dependency to get model manager"""
-    return await get_model_manager()
 
-@router.post("/completions", response_model=ChatCompletionResponse)
-async def create_chat_completion(
-    request: ChatCompletionRequest,
-    model_manager = Depends(get_model_manager_dep)
-):compatible API and advanced features
-"""
 
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -20,7 +10,7 @@ import asyncio
 import torch
 from uuid import uuid4
 
-from ....core.custom_model_manager import get_model_manager
+from src.core.custom_model_manager import CustomModelManager
 from ....core.redis_client import get_cache
 from ....schemas.chat import (
     ChatCompletionRequest, ChatCompletionResponse, 
@@ -29,14 +19,14 @@ from ....schemas.chat import (
 
 router = APIRouter()
 
-async def get_model_manager(request: Request) -> ModelManager:
-    """Dependency to get model manager"""
+async def get_model_manager(request: Request) -> CustomModelManager:
+    """Dependency to get custom model manager"""
     return request.app.state.model_manager
 
 @router.post("/completions", response_model=ChatCompletionResponse)
 async def create_chat_completion(
     request: ChatCompletionRequest,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """
     Create a chat completion (OpenAI-compatible)
@@ -79,7 +69,7 @@ async def create_chat_completion(
 
 async def generate_complete_response(
     request: ChatCompletionRequest,
-    model_manager: ModelManager,
+    model_manager: CustomModelManager,
     model_name: str,
     start_time: float
 ) -> ChatCompletionResponse:
@@ -127,7 +117,7 @@ async def generate_complete_response(
 
 async def generate_streaming_response(
     request: ChatCompletionRequest,
-    model_manager: ModelManager,
+    model_manager: CustomModelManager,
     model_name: str,
     start_time: float
 ) -> AsyncIterator[str]:
@@ -174,7 +164,7 @@ async def generate_streaming_response(
 
 async def generate_ollama_response(
     request: ChatCompletionRequest,
-    model_manager: ModelManager,
+    model_manager: CustomModelManager,
     model_name: str
 ) -> str:
     """Generate response using Ollama"""
@@ -202,7 +192,7 @@ async def generate_ollama_response(
 
 async def generate_ollama_streaming(
     request: ChatCompletionRequest,
-    model_manager: ModelManager,
+    model_manager: CustomModelManager,
     model_name: str
 ) -> AsyncIterator[Dict]:
     """Generate streaming response using Ollama"""
@@ -241,7 +231,7 @@ async def generate_ollama_streaming(
 
 async def generate_hf_response(
     request: ChatCompletionRequest,
-    model_manager: ModelManager,
+    model_manager: CustomModelManager,
     model_name: str
 ) -> str:
     """Generate response using HuggingFace models"""
@@ -307,7 +297,7 @@ async def log_request_error(request: ChatCompletionRequest, error: str, response
 
 @router.get("/models")
 async def list_chat_models(
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """List available chat models"""
     models = await model_manager.get_available_models()
@@ -331,7 +321,7 @@ async def list_chat_models(
 @router.post("/switch-model")
 async def switch_model(
     model_name: str,
-    model_manager: ModelManager = Depends(get_model_manager)
+    model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Switch to a different model"""
     success = await model_manager.switch_model(model_name)
