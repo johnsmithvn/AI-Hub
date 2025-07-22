@@ -1,7 +1,7 @@
 """
 Custom Model Manager for AI Backend Hub
+Hybrid model support: HuggingFace/PyTorch + GGUF external models
 Full control over model loading, training, and GPU management
-No external dependencies - Pure HuggingFace + PyTorch
 Optimized for RTX 4060 Ti 16GB VRAM
 """
 
@@ -9,7 +9,7 @@ import asyncio
 import time
 import json
 import hashlib
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from dataclasses import dataclass, field
 from enum import Enum
 import GPUtil
@@ -17,15 +17,7 @@ import psutil
 from pathlib import Path
 import torch
 from transformers import (
-    AutoTokenizer, 
-    AutoModelForCausalLM, 
-    AutoModelForSeq2SeqLM,
-    BitsAndBytesConfig, 
-    TrainingArguments,
-    Trainer,
-    DataCollatorForLanguageModeling,
-    pipeline,
-    GenerationConfig
+    AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, TrainingArguments, Trainer, DataCollatorForLanguageModeling, GenerationConfig
 )
 from peft import (
     LoraConfig, 
@@ -41,6 +33,21 @@ from loguru import logger
 from .config import settings
 from .redis_client import get_cache
 
+# Import hybrid extensions
+try:
+    from .hybrid_extensions import (
+        load_model_hybrid, 
+        generate_response_hybrid, 
+        unload_model_hybrid,
+        _load_gguf_model_internal,
+        _load_huggingface_model_internal,
+        _generate_hf_response
+    )
+    HYBRID_EXTENSIONS_AVAILABLE = True
+except ImportError:
+    HYBRID_EXTENSIONS_AVAILABLE = False
+    logger.warning("Hybrid extensions not available")
+
 class ModelType(Enum):
     """Model type enumeration"""
     CHAT = "chat"
@@ -48,6 +55,7 @@ class ModelType(Enum):
     VIETNAMESE = "vietnamese"
     MULTIMODAL = "multimodal"
     CUSTOM = "custom"
+    EMBEDDING = "embedding"
 
 class ModelStatus(Enum):
     """Model loading status"""
@@ -56,16 +64,26 @@ class ModelStatus(Enum):
     LOADED = "loaded"
     TRAINING = "training"
     ERROR = "error"
+    SWITCHING = "switching"
+
+class ModelFormat(Enum):
+    """Model format types"""
+    HUGGINGFACE = "huggingface"
+    GGUF = "gguf"
+    PYTORCH = "pytorch"
+    ONNX = "onnx"
 
 @dataclass
 class LocalModelInfo:
-    """Unified model information schema - compatible with both old and new APIs"""
+    """Unified model information schema - supports both HF and GGUF models"""
     name: str
     model_type: ModelType
     local_path: str
+    model_format: ModelFormat = ModelFormat.HUGGINGFACE  # New: format type
+    
     # Core attributes
     size_gb: float = 0.0
-    vram_usage: float = 0.0  # Added for API compatibility
+    vram_usage: float = 0.0
     load_time: float = 0.0
     status: ModelStatus = ModelStatus.UNLOADED
     last_used: float = field(default_factory=time.time)
@@ -74,22 +92,26 @@ class LocalModelInfo:
     provider: str = "local"
     tokenizer_path: Optional[str] = None
     config_path: Optional[str] = None
-    quantization: Optional[str] = None  # Added for API compatibility
+    quantization: Optional[str] = None
     specialties: List[str] = field(default_factory=list)
     languages: List[str] = field(default_factory=list)
     config: Dict[str, Any] = field(default_factory=dict)
     generation_config: Dict[str, Any] = field(default_factory=dict)
     custom_settings: Dict[str, Any] = field(default_factory=dict)
     performance_metrics: Dict[str, float] = field(default_factory=dict)
+    
+    # GGUF-specific attributes
+    context_length: Optional[int] = None
+    gpu_layers: Optional[int] = None
 class CustomModelManager:
     """
-    Unified Model Manager - Single source of truth for all model operations
-    Replaces both CustomModelManager and ModelManager to eliminate conflicts
+    Hybrid Model Manager - Supports both HuggingFace and GGUF models
     
     Features:
-    - Load models từ local paths (HuggingFace + PyTorch only, no Ollama)
-    - Custom training với LoRA/QLoRA support
-    - Intelligent VRAM management cho RTX 4060 Ti 16GB
+    - HuggingFace models từ local paths (PyTorch + transformers)
+    - GGUF models từ external directory (llama.cpp)
+    - Intelligent model switching và VRAM management  
+    - LoRA/QLoRA training support (HuggingFace only)
     - Vietnamese language support + multi-language
     - API compatibility với existing endpoints
     """
@@ -97,49 +119,141 @@ class CustomModelManager:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Core storage
+        # Core storage - HuggingFace models
         self.model_registry: Dict[str, LocalModelInfo] = {}
         self.loaded_models: Dict[str, Dict[str, Any]] = {}
         self.training_jobs: Dict[str, Any] = {}
         self.active_model: Optional[str] = None
         
+        # GGUF models integration
+        self.gguf_models: Dict[str, LocalModelInfo] = {}
+        self.gguf_loader = None
+        
         # API compatibility properties
-        self.models: Dict[str, LocalModelInfo] = self.model_registry  # Alias for API compatibility
-        self.tokenizers: Dict[str, Any] = {}  # Separate tokenizer storage for API compatibility
+        self.models: Dict[str, LocalModelInfo] = {}  # Combined registry
+        self.tokenizers: Dict[str, Any] = {}  # Separate tokenizer storage
         
         # Performance tracking
         self.request_counts: Dict[str, int] = {}
         self.response_times: Dict[str, List[float]] = {}
 
         # RTX 4060 Ti 16GB optimization
-        self.total_vram = 16 * 1024  # 16GB in MB
-        self.max_vram_usage = 0.85   # Use max 85% = ~13.6GB
+        self.total_vram = settings.MAX_VRAM_GB * 1024  # Convert to MB
+        self.max_vram_usage = settings.MAX_VRAM_USAGE
         self.reserved_vram = 2 * 1024  # Reserve 2GB for system
         self.max_vram = self.total_vram
 
-        # Local model paths
-        self.local_models_dir = Path("local_models")
-        self.chat_models_dir = self.local_models_dir / "chat_models"
-        self.code_models_dir = self.local_models_dir / "code_models"
-        self.vietnamese_models_dir = self.local_models_dir / "vietnamese_models"
-        self.custom_models_dir = self.local_models_dir / "custom_models"
+        # Model paths
+        self.local_models_dir = Path(settings.LOCAL_MODELS_DIR)
+        self.external_models_dir = Path(settings.EXTERNAL_MODELS_DIR)
         
         # Training output
-        self.trained_models_dir = Path("trained_models")
-        self.training_data_dir = Path("training_data")
+        self.trained_models_dir = Path(settings.TRAINING_OUTPUT_DIR)
+        self.training_data_dir = Path(settings.TRAINING_DATA_DIR)
         
-        # Initialize
-        asyncio.create_task(self._scan_local_models())
+        # Initialize both HF and GGUF models
+        asyncio.create_task(self._initialize_all_models())
         
+        # Add hybrid methods if available
+        if HYBRID_EXTENSIONS_AVAILABLE:
+            self.load_model_hybrid = lambda *args, **kwargs: load_model_hybrid(self, *args, **kwargs)
+            self.generate_response_hybrid = lambda *args, **kwargs: generate_response_hybrid(self, *args, **kwargs)  
+            self.unload_model_hybrid = lambda *args, **kwargs: unload_model_hybrid(self, *args, **kwargs)
+            self._load_gguf_model_internal = lambda *args, **kwargs: _load_gguf_model_internal(self, *args, **kwargs)
+            self._load_huggingface_model_internal = lambda *args, **kwargs: _load_huggingface_model_internal(self, *args, **kwargs)
+            self._generate_hf_response = lambda *args, **kwargs: _generate_hf_response(self, *args, **kwargs)
+            
+            # Add enum references for hybrid methods
+            self.ModelStatus = ModelStatus
+            self.ModelFormat = ModelFormat
+        
+    async def _initialize_all_models(self):
+        """Initialize both HuggingFace and GGUF models"""
+        logger.info("🔧 Initializing Hybrid Model Manager...")
+        
+        # Initialize GGUF loader first
+        if settings.ENABLE_GGUF_MODELS:
+            try:
+                from .gguf_loader import get_gguf_loader
+                self.gguf_loader = await get_gguf_loader()
+                await self._integrate_gguf_models()
+            except ImportError:
+                logger.warning("GGUF support disabled - llama-cpp-python not available")
+        
+        # Scan local HuggingFace models
+        await self._scan_local_models()
+        
+        # Combine all models into unified registry
+        self._update_combined_registry()
+        
+        logger.info(f"✅ Initialized {len(self.models)} total models (HF: {len(self.model_registry)}, GGUF: {len(self.gguf_models)})")
+        
+    async def _integrate_gguf_models(self):
+        """Integrate GGUF models into the manager"""
+        if not self.gguf_loader:
+            return
+        
+        for model_name, gguf_info in self.gguf_loader.gguf_models.items():
+            # Convert GGUFModelInfo to LocalModelInfo
+            model_info = LocalModelInfo(
+                name=model_name,
+                model_type=self._determine_model_type(model_name, gguf_info.provider),
+                local_path=gguf_info.model_path,
+                model_format=ModelFormat.GGUF,
+                size_gb=gguf_info.file_size_gb,
+                vram_usage=gguf_info.estimated_vram_mb,
+                provider=gguf_info.provider,
+                quantization=gguf_info.quantization,
+                context_length=gguf_info.context_length,
+                gpu_layers=gguf_info.gpu_layers,
+                specialties=self._determine_specialties(model_name),
+                languages=self._determine_languages(model_name, gguf_info.provider),
+                config={
+                    "model_format": "gguf",
+                    "context_length": gguf_info.context_length,
+                    "gpu_layers": gguf_info.gpu_layers,
+                    "original_path": gguf_info.model_path
+                }
+            )
+            
+            self.gguf_models[model_name] = model_info
+    
+    def _determine_model_type(self, model_name: str, provider: str) -> ModelType:
+        """Determine model type from name and provider"""
+        name_lower = model_name.lower()
+        
+        if provider == "vilm" or "vietnam" in name_lower:
+            return ModelType.VIETNAMESE
+        elif any(x in name_lower for x in ["code", "coder", "programming", "codellama"]):
+            return ModelType.CODE
+        elif any(x in name_lower for x in ["vision", "llava", "multimodal"]):
+            return ModelType.MULTIMODAL
+        elif any(x in name_lower for x in ["embed", "sentence"]):
+            return ModelType.EMBEDDING
+        else:
+            return ModelType.CHAT
+    
+    def _update_combined_registry(self):
+        """Update combined models registry for API compatibility"""
+        self.models.clear()
+        self.models.update(self.model_registry)  # HuggingFace models
+        self.models.update(self.gguf_models)     # GGUF models
+    
     async def _scan_local_models(self):
-        """Scan local directories for available models"""
-        logger.info("🔍 Scanning local models...")
+        """Scan local directories for HuggingFace models"""
+        logger.info("🔍 Scanning local HuggingFace models...")
         
+        if not self.local_models_dir.exists():
+            logger.info(f"Creating local models directory: {self.local_models_dir}")
+            self.local_models_dir.mkdir(parents=True, exist_ok=True)
+            return
+        
+        # Scan subdirectories by type
         model_dirs = [
-            (self.chat_models_dir, ModelType.CHAT),
-            (self.code_models_dir, ModelType.CODE),
-            (self.vietnamese_models_dir, ModelType.VIETNAMESE),
-            (self.custom_models_dir, ModelType.CUSTOM)
+            (self.local_models_dir / "chat_models", ModelType.CHAT),
+            (self.local_models_dir / "code_models", ModelType.CODE),
+            (self.local_models_dir / "vietnamese_models", ModelType.VIETNAMESE),
+            (self.local_models_dir / "custom_models", ModelType.CUSTOM)
         ]
         
         for model_dir, model_type in model_dirs:
@@ -147,15 +261,19 @@ class CustomModelManager:
                 for model_path in model_dir.iterdir():
                     if model_path.is_dir():
                         await self._register_local_model(model_path, model_type)
+        
+        # Also scan root directory for any models
+        for model_path in self.local_models_dir.iterdir():
+            if model_path.is_dir() and (model_path / "config.json").exists():
+                await self._register_local_model(model_path, ModelType.CUSTOM)
                         
-        logger.info(f"📊 Found {len(self.model_registry)} local models")
-    
+        logger.info(f"📊 Found {len(self.model_registry)} local HuggingFace models")
     async def _register_local_model(self, model_path: Path, model_type: ModelType):
-        """Register a local model"""
+        """Register a local HuggingFace model"""
         try:
             model_name = model_path.name
             
-            # Check if valid model directory
+            # Check if valid HuggingFace model directory
             if not (model_path / "config.json").exists():
                 logger.warning(f"⚠️ No config.json found in {model_path}")
                 return
@@ -167,30 +285,71 @@ class CustomModelManager:
                 name=model_name,
                 model_type=model_type,
                 local_path=str(model_path),
-                size_gb=size_gb
+                model_format=ModelFormat.HUGGINGFACE,
+                size_gb=size_gb,
+                provider="local",
+                specialties=self._determine_specialties(model_name),
+                languages=self._determine_languages(model_name, "local")
             )
             
             self.model_registry[model_name] = model_info
-            logger.info(f"✅ Registered {model_name} ({size_gb:.1f}GB)")
+            logger.info(f"✅ Registered HF model: {model_name} ({size_gb:.1f}GB)")
             
         except Exception as e:
             logger.error(f"❌ Failed to register {model_path}: {e}")
+
+    def _determine_specialties(self, model_name: str) -> List[str]:
+        """Determine model specialties based on name"""
+        specialties = []
+        name_lower = model_name.lower()
+        
+        if any(x in name_lower for x in ["chat", "instruct", "conversation"]):
+            specialties.append("conversation")
+        if any(x in name_lower for x in ["code", "coder", "programming"]):
+            specialties.append("coding")
+        if any(x in name_lower for x in ["dpo", "roleplay", "storytelling"]):
+            specialties.append("creative_writing")
+        if "vl" in name_lower or "vision" in name_lower:
+            specialties.append("multimodal")
+        if any(x in name_lower for x in ["vietnam", "vi", "vietnamese"]):
+            specialties.append("vietnamese")
+        
+        return specialties or ["general"]
+    
+    def _determine_languages(self, model_name: str, provider: str) -> List[str]:
+        """Determine supported languages"""
+        languages = ["en"]  # Default English
+        name_lower = model_name.lower()
+        
+        if provider == "vilm" or any(x in name_lower for x in ["vietnam", "vi", "vietnamese"]):
+            languages.append("vi")
+        if "qwen" in name_lower:
+            languages.extend(["zh", "en"])
+        if "multilingual" in name_lower:
+            languages.extend(["es", "fr", "de", "ja", "ko"])
+            
+        return languages
     
     async def get_available_models(self) -> Dict[str, LocalModelInfo]:
-        """Return mapping of model name to info"""
-        return self.model_registry.copy()
+        """Return combined mapping of all models (HF + GGUF)"""
+        return self.models.copy()
 
     async def list_available_models(self) -> List[Dict[str, Any]]:
-        """Get list of models as dictionaries"""
+        """Get list of all models as dictionaries"""
         models = []
-        for name, info in self.model_registry.items():
+        for name, info in self.models.items():
             models.append({
                 "name": name,
                 "type": info.model_type.value,
+                "format": info.model_format.value,
                 "size_gb": info.size_gb,
                 "status": info.status.value,
                 "vram_usage": info.vram_usage,
                 "local_path": info.local_path,
+                "provider": info.provider,
+                "quantization": info.quantization,
+                "specialties": info.specialties,
+                "languages": info.languages
             })
         return models
     
@@ -201,9 +360,14 @@ class CustomModelManager:
         max_memory: Optional[Dict] = None
     ) -> bool:
         """
-        Load model từ local path với custom configuration
+        Load model using hybrid system (HuggingFace or GGUF)
         """
         try:
+            # Use hybrid loading if available
+            if HYBRID_EXTENSIONS_AVAILABLE and hasattr(self, 'load_model_hybrid'):
+                return await self.load_model_hybrid(model_name, quantization, max_memory)
+            
+            # Fallback to legacy HuggingFace loading
             if model_name not in self.model_registry:
                 raise ValueError(f"Model {model_name} not found in registry")
             
@@ -284,8 +448,13 @@ class CustomModelManager:
             return False
     
     async def unload_model(self, model_name: str) -> bool:
-        """Unload model để free VRAM"""
+        """Unload model using hybrid system (HuggingFace or GGUF)"""
         try:
+            # Use hybrid unloading if available
+            if HYBRID_EXTENSIONS_AVAILABLE and hasattr(self, 'unload_model_hybrid'):
+                return await self.unload_model_hybrid(model_name)
+            
+            # Fallback to legacy HuggingFace unloading
             if model_name not in self.loaded_models:
                 logger.warning(f"⚠️ Model {model_name} not loaded")
                 return False
@@ -327,8 +496,15 @@ class CustomModelManager:
         top_p: float = 0.9,
         stream: bool = False
     ) -> str:
-        """Generate response với custom model"""
+        """Generate response using hybrid system (HuggingFace or GGUF)"""
         try:
+            # Use hybrid generation if available
+            if HYBRID_EXTENSIONS_AVAILABLE and hasattr(self, 'generate_response_hybrid'):
+                return await self.generate_response_hybrid(
+                    model_name, prompt, max_tokens, temperature, top_p, stream
+                )
+            
+            # Fallback to legacy HuggingFace generation
             if model_name not in self.loaded_models:
                 success = await self.load_model(model_name)
                 if not success:

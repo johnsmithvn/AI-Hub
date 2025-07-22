@@ -33,16 +33,37 @@ class Settings(BaseSettings):
     )
     REDIS_MAX_CONNECTIONS: int = Field(default=20, description="Redis connection pool size")
     
-    # Model Management
+    # Model Management - Enhanced for External Models
     MODEL_CACHE_DIR: str = Field(default="./models", description="Local model cache directory")
+    EXTERNAL_MODELS_DIR: str = Field(
+        default="d:/DEV/All-Project/AI-models", 
+        description="External models directory (for GGUF models)"
+    )
     MAX_VRAM_GB: float = Field(default=14.0, description="Maximum VRAM to use (GB)")
     MODEL_LOAD_TIMEOUT: int = Field(default=300, description="Model loading timeout (seconds)")
     CONCURRENT_MODELS: int = Field(default=2, description="Maximum concurrent loaded models")
     
-    # Custom Local Model Management (Replaced Ollama)
-    LOCAL_MODELS_DIR: str = Field(default="./local_models", description="Local models directory")
-    MAX_VRAM_USAGE: float = Field(default=0.85, description="Maximum VRAM usage (85% of 16GB)")
+    # Model Switching & Performance
+    ENABLE_SMART_SWITCHING: bool = Field(default=True, description="Enable intelligent model switching")
+    MODEL_KEEPALIVE_MINUTES: int = Field(default=30, description="Keep unused models loaded (minutes)")
+    AUTO_UNLOAD_THRESHOLD: float = Field(default=0.90, description="Auto-unload when VRAM > threshold")
+    PRELOAD_POPULAR_MODELS: bool = Field(default=True, description="Preload frequently used models")
+    
+    # Quantization & Optimization
+    ENABLE_4BIT_QUANTIZATION: bool = Field(default=True, description="Enable 4-bit quantization")
+    ENABLE_8BIT_QUANTIZATION: bool = Field(default=True, description="Enable 8-bit quantization")
     DEFAULT_QUANTIZATION: str = Field(default="4bit", description="Default quantization (4bit/8bit/16bit)")
+    ENABLE_FLASH_ATTENTION: bool = Field(default=True, description="Enable Flash Attention if available")
+    ENABLE_MODEL_PARALLELISM: bool = Field(default=False, description="Enable model parallelism for large models")
+    
+    # External Model Provider Configuration
+    ENABLE_GGUF_MODELS: bool = Field(default=True, description="Enable GGUF model support")
+    GGUF_CONTEXT_LENGTH: int = Field(default=4096, description="Default context length for GGUF models")
+    GGUF_GPU_LAYERS: int = Field(default=-1, description="GPU layers for GGUF (-1 = auto)")
+    
+    # Custom Local Model Management (Replaced Ollama)
+    LOCAL_MODELS_DIR: str = Field(default="./local_models", description="Local HuggingFace models directory")
+    MAX_VRAM_USAGE: float = Field(default=0.85, description="Maximum VRAM usage (85% of total)")
     
     # HuggingFace Configuration
     HF_TOKEN: Optional[str] = Field(default=None, description="HuggingFace API token")
