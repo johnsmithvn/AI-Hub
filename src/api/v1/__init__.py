@@ -1,22 +1,25 @@
 """
-API v1 router - Main API endpoints
+API v1 router - Clean, production-ready endpoints only
 """
 
 from fastapi import APIRouter
-from .endpoints import (
-    chat, models, training, files, health, 
-    vision, audio, documents, analytics
+from .endpoints import chat, models, training, health
+from .endpoints._placeholders import (
+    files_router, vision_router, audio_router, 
+    documents_router, analytics_router
 )
 
 router = APIRouter()
 
-# Include all endpoint routers
+# Active endpoints (fully implemented)
 router.include_router(health.router, prefix="/health", tags=["Health"])
-router.include_router(chat.router, prefix="/chat", tags=["Chat"])
+router.include_router(chat.router, prefix="/chat", tags=["Chat"])  
 router.include_router(models.router, prefix="/models", tags=["Models"])
 router.include_router(training.router, prefix="/training", tags=["Training"])
-router.include_router(files.router, prefix="/files", tags=["Files"])
-router.include_router(vision.router, prefix="/vision", tags=["Vision"])
-router.include_router(audio.router, prefix="/audio", tags=["Audio"])
-router.include_router(documents.router, prefix="/documents", tags=["Documents"])
-router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
+
+# Placeholder endpoints (return 501 Not Implemented)
+router.include_router(files_router, prefix="/files", tags=["Files (Disabled)"])
+router.include_router(vision_router, prefix="/vision", tags=["Vision (Disabled)"])
+router.include_router(audio_router, prefix="/audio", tags=["Audio (Disabled)"])
+router.include_router(documents_router, prefix="/documents", tags=["Documents (Disabled)"])
+router.include_router(analytics_router, prefix="/analytics", tags=["Analytics (Disabled)"])

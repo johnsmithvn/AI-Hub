@@ -21,7 +21,7 @@ async def test_basic_functionality():
         print(f"  ✅ Schemas working: {msg.role}")
         
         # Test model manager
-        from src.core.model_manager import ModelManager
+        from src.core.custom_model_manager import CustomModelManager
         print("  ✅ Model manager available")
         
         return True

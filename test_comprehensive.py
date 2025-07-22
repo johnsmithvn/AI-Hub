@@ -104,13 +104,13 @@ async def test_model_manager():
     
     try:
         # Import without initializing (to avoid needing actual services)
-        from src.core.model_manager import ModelManager
+        from src.core.custom_model_manager import CustomModelManager
         print("  ✅ ModelManager class imported")
         
         # Test if class has required methods
         required_methods = ['get_available_models', 'load_model', 'generate_response']
         for method in required_methods:
-            assert hasattr(ModelManager, method), f"Missing method: {method}"
+            assert hasattr(CustomModelManager, method), f"Missing method: {method}"
         print("  ✅ All required methods present")
         
         return True

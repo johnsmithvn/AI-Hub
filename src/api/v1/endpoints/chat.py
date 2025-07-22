@@ -9,6 +9,7 @@ import json
 import asyncio
 import torch
 from uuid import uuid4
+from loguru import logger
 
 from src.core.custom_model_manager import CustomModelManager
 from ....core.redis_client import get_cache
@@ -291,9 +292,25 @@ async def cache_conversation_turn(session_id: str, messages: List[ChatMessage], 
     await cache.set(f"conversation:{session_id}", conversation, expire=86400)  # 24 hours
 
 async def log_request_error(request: ChatCompletionRequest, error: str, response_time: float):
-    """Log request error for analytics"""
-    # This could be enhanced to store in database
-    pass
+    """Log request error for analytics - Enhanced implementation"""
+    try:
+        error_data = {
+            "timestamp": time.time(),
+            "model": request.model,
+            "error": error,
+            "response_time": response_time,
+            "message_count": len(request.messages),
+            "user_id": getattr(request, 'user_id', 'anonymous')
+        }
+        
+        # Log to console for now (could be enhanced to store in database)
+        logger.error(f"Chat completion error: {error_data}")
+        
+        # TODO: Store in analytics database when implemented
+        # await analytics_service.log_error(error_data)
+        
+    except Exception as e:
+        logger.error(f"Failed to log request error: {e}")
 
 @router.get("/models")
 async def list_chat_models(

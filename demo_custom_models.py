@@ -1,6 +1,9 @@
 """
-Demo script for Custom Model Management System
+Demo script for Unified Custom Model Management System
 Tests local model loading, generation, and training
+
+Usage: python demo_custom_models.py
+Note: This is a development/testing script, not used in production runtime
 """
 
 import asyncio

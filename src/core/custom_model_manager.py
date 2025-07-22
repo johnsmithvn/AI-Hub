@@ -59,40 +59,55 @@ class ModelStatus(Enum):
 
 @dataclass
 class LocalModelInfo:
-    """Local model information"""
+    """Unified model information schema - compatible with both old and new APIs"""
     name: str
     model_type: ModelType
     local_path: str
-    tokenizer_path: Optional[str] = None
-    config_path: Optional[str] = None
+    # Core attributes
     size_gb: float = 0.0
+    vram_usage: float = 0.0  # Added for API compatibility
     load_time: float = 0.0
     status: ModelStatus = ModelStatus.UNLOADED
     last_used: float = field(default_factory=time.time)
-    generation_config: Dict[str, Any] = field(default_factory=dict)
-    custom_settings: Dict[str, Any] = field(default_factory=dict)
-    performance_metrics: Dict[str, float] = field(default_factory=dict)
+    
+    # Extended attributes for flexibility
     provider: str = "local"
+    tokenizer_path: Optional[str] = None
+    config_path: Optional[str] = None
+    quantization: Optional[str] = None  # Added for API compatibility
     specialties: List[str] = field(default_factory=list)
     languages: List[str] = field(default_factory=list)
     config: Dict[str, Any] = field(default_factory=dict)
+    generation_config: Dict[str, Any] = field(default_factory=dict)
+    custom_settings: Dict[str, Any] = field(default_factory=dict)
+    performance_metrics: Dict[str, float] = field(default_factory=dict)
 class CustomModelManager:
     """
-    Custom Model Manager - Toàn quyền kiểm soát models
+    Unified Model Manager - Single source of truth for all model operations
+    Replaces both CustomModelManager and ModelManager to eliminate conflicts
+    
     Features:
-    - Load models từ local paths (no internet required)
-    - Custom training với LoRA/QLoRA
+    - Load models từ local paths (HuggingFace + PyTorch only, no Ollama)
+    - Custom training với LoRA/QLoRA support
     - Intelligent VRAM management cho RTX 4060 Ti 16GB
-    - Vietnamese language support
-    - Code generation optimization
+    - Vietnamese language support + multi-language
+    - API compatibility với existing endpoints
     """
     
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.loaded_models: Dict[str, Dict[str, Any]] = {}
+        
+        # Core storage
         self.model_registry: Dict[str, LocalModelInfo] = {}
+        self.loaded_models: Dict[str, Dict[str, Any]] = {}
         self.training_jobs: Dict[str, Any] = {}
         self.active_model: Optional[str] = None
+        
+        # API compatibility properties
+        self.models: Dict[str, LocalModelInfo] = self.model_registry  # Alias for API compatibility
+        self.tokenizers: Dict[str, Any] = {}  # Separate tokenizer storage for API compatibility
+        
+        # Performance tracking
         self.request_counts: Dict[str, int] = {}
         self.response_times: Dict[str, List[float]] = {}
 
@@ -238,7 +253,7 @@ class CustomModelManager:
                 low_cpu_mem_usage=True
             )
             
-            # Store loaded model
+            # Store loaded model and tokenizer separately for API compatibility
             self.loaded_models[model_name] = {
                 "model": model,
                 "tokenizer": tokenizer,
@@ -247,11 +262,15 @@ class CustomModelManager:
                 "generation_config": GenerationConfig.from_pretrained(model_info.local_path)
             }
             
+            # Store tokenizer separately for API compatibility
+            self.tokenizers[model_name] = tokenizer
+            
             # Update status
             model_info.status = ModelStatus.LOADED
             model_info.vram_usage = self._get_model_vram_usage(model)
             model_info.last_used = time.time()
             model_info.load_time = self.loaded_models[model_name]["load_time"]
+            model_info.quantization = quantization  # Store quantization info
 
             logger.info(f"✅ {model_name} loaded successfully ({model_info.vram_usage:.1f}MB VRAM)")
             self.active_model = model_name
@@ -275,6 +294,10 @@ class CustomModelManager:
             del self.loaded_models[model_name]["model"]
             del self.loaded_models[model_name]["tokenizer"]
             del self.loaded_models[model_name]
+            
+            # Clear tokenizer from separate storage
+            if model_name in self.tokenizers:
+                del self.tokenizers[model_name]
             
             # Force garbage collection
             torch.cuda.empty_cache()
@@ -363,12 +386,87 @@ class CustomModelManager:
         language: str = "en",
         complexity: str = "medium",
     ) -> Optional[str]:
-        """Simple heuristic for selecting a model"""
+        """Intelligent model selection - enhanced with scoring"""
+        logger.info(f"🎯 Finding best model for task: {task_type}, language: {language}")
+        
+        # Map task types to model types
+        task_mapping = {
+            "chat": ModelType.CHAT,
+            "conversation": ModelType.CHAT,
+            "code": ModelType.CODE,
+            "programming": ModelType.CODE,
+            "vietnamese": ModelType.VIETNAMESE,
+            "vi": ModelType.VIETNAMESE,
+            "multimodal": ModelType.MULTIMODAL,
+            "custom": ModelType.CUSTOM
+        }
+        
+        target_type = task_mapping.get(task_type.lower(), ModelType.CHAT)
+        
+        # Filter models by type and availability
+        suitable_models = []
         for name, info in self.model_registry.items():
-            if info.model_type.value == task_type:
-                return name
-        # fallback to any model
-        return next(iter(self.model_registry.keys()), None)
+            if info.model_type == target_type:
+                score = 100  # Base score
+                
+                # Prefer loaded models
+                if info.status == ModelStatus.LOADED:
+                    score += 50
+                
+                # Language preference
+                if language in info.languages or not info.languages:
+                    score += 30
+                
+                # Performance history
+                if name in self.response_times and self.response_times[name]:
+                    avg_time = sum(self.response_times[name]) / len(self.response_times[name])
+                    if avg_time < 1000:  # < 1 second
+                        score += 20
+                
+                # Recent usage
+                time_since_use = time.time() - info.last_used
+                if time_since_use < 3600:  # Used within last hour
+                    score += 10
+                
+                suitable_models.append((name, score))
+        
+        # Fallback to any chat model if no specific match
+        if not suitable_models and target_type != ModelType.CHAT:
+            for name, info in self.model_registry.items():
+                if info.model_type == ModelType.CHAT:
+                    suitable_models.append((name, 50))  # Lower score for fallback
+        
+        if not suitable_models:
+            logger.warning(f"No suitable model found for task: {task_type}")
+            return None
+        
+        # Sort by score and return best
+        suitable_models.sort(key=lambda x: x[1], reverse=True)
+        best_model = suitable_models[0][0]
+        
+        logger.info(f"✅ Selected model: {best_model} for task: {task_type}")
+        return best_model
+    
+    # API Compatibility Methods
+    async def initialize(self):
+        """Initialize method for compatibility with ModelManager API"""
+        logger.info("🔧 Initializing Unified Model Manager...")
+        await self._scan_local_models()
+        logger.info("✅ Model Manager initialized successfully")
+    
+    async def cleanup(self):
+        """Cleanup resources"""
+        logger.info("🧹 Cleaning up Model Manager...")
+        
+        # Unload all models
+        for model_name in list(self.loaded_models.keys()):
+            await self.unload_model(model_name)
+        
+        # Clear GPU cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        logger.info("✅ Model Manager cleanup complete")
     async def start_training(
         self,
         model_name: str,
