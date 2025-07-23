@@ -447,3 +447,74 @@ def analyze_dataset(file_path: Path, format: str) -> Dict[str, Any]:
             "format": format
         }
 
+async def start_training_job(job_id: str, config: TrainingJobRequest):
+    """Start the actual training process (background task)"""
+    
+    # This is a placeholder for the actual training implementation
+    # In production, this would:
+    # 1. Load the base model
+    # 2. Prepare the dataset
+    # 3. Set up LoRA/QLoRA configuration
+    # 4. Start training with progress updates
+    # 5. Save the trained adapter
+    
+    job_file = Path(f"training_jobs/{job_id}.json")
+    
+    try:
+        # Update job status to running
+        with open(job_file, 'r') as f:
+            job_data = json.load(f)
+        
+        job_data["status"] = "running"
+        job_data["started_at"] = "2025-01-20T00:00:00Z"
+        
+        with open(job_file, 'w') as f:
+            json.dump(job_data, f, indent=2)
+        
+        # Simulate training progress
+        total_steps = 1000  # This would be calculated based on dataset size
+        for step in range(total_steps):
+            # Update progress
+            progress = (step + 1) / total_steps * 100
+            current_epoch = (step + 1) // (total_steps // config.epochs)
+            
+            job_data["progress_percentage"] = progress
+            job_data["current_step"] = step + 1
+            job_data["total_steps"] = total_steps
+            job_data["current_epoch"] = current_epoch
+            job_data["training_loss"] = 2.5 - (progress / 100) * 1.5  # Simulated decreasing loss
+            
+            with open(job_file, 'w') as f:
+                json.dump(job_data, f, indent=2)
+            
+            # Small delay to simulate training time
+            await asyncio.sleep(0.1)
+            
+            # Check if job was cancelled
+            with open(job_file, 'r') as f:
+                current_data = json.load(f)
+            if current_data["status"] == "cancelled":
+                return
+        
+        # Mark as completed
+        job_data["status"] = "completed"
+        job_data["completed_at"] = "2025-01-20T00:00:00Z"
+        job_data["progress_percentage"] = 100.0
+        
+        with open(job_file, 'w') as f:
+            json.dump(job_data, f, indent=2)
+            
+    except Exception as e:
+        # Mark as failed
+        try:
+            with open(job_file, 'r') as f:
+                job_data = json.load(f)
+            
+            job_data["status"] = "failed"
+            job_data["error_message"] = str(e)
+            job_data["completed_at"] = "2025-01-20T00:00:00Z"
+            
+            with open(job_file, 'w') as f:
+                json.dump(job_data, f, indent=2)
+        except:
+            pass
