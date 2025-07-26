@@ -1,49 +1,44 @@
-# AI Backend Hub - Multi-Modal AI System
-FROM python:3.11-slim
+# Sử dụng base image của NVIDIA để hỗ trợ GPU, thay vì python:3.11-slim
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
 
-# Set environment variables
+# Đặt các biến môi trường
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
+# Cài đặt Python 3.11 và các gói hệ thống cần thiết
+# Gộp các lệnh RUN để giảm số layer và tối ưu build
+# ✅ Cách tối ưu hơn (không cần PPA)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
     curl \
     git \
+    build-essential \
     libpq-dev \
     postgresql-client \
     redis-tools \
-    # Audio processing
     ffmpeg \
     libsndfile1 \
-    # Image processing
     libgl1-mesa-glx \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    # OCR dependencies
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    # Cleanup
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app directory
+# Tạo thư mục làm việc
 WORKDIR /app
 
-# Copy requirements first for better caching
+# Copy requirements trước để tận dụng cache của Docker
 COPY requirements.txt .
 
-# Install Python dependencies
+# Cài đặt các thư viện Python
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy toàn bộ mã nguồn của ứng dụng
 COPY . .
 
-# Create necessary directories
+# Tạo các thư mục cần thiết
 RUN mkdir -p \
     models \
     hf_cache \
@@ -53,15 +48,19 @@ RUN mkdir -p \
     logs \
     training_jobs
 
-# Set permissions
-RUN chmod +x scripts/*.sh 2>/dev/null || true
+# === CẢI TIẾN BẢO MẬT: Tạo và sử dụng user không phải root ===
+RUN useradd --create-home appuser && \
+    chown -R appuser:appuser /app
 
-# Expose ports
+# Chuyển sang user mới
+USER appuser
+
+# Expose port 8000
 EXPOSE 8000
 
-# Health check
+# Health check (giữ nguyên, đã rất tốt)
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the application
-CMD ["python", "main.py"]
+# Lệnh khởi chạy ứng dụng
+CMD ["python3.11", "main.py"]

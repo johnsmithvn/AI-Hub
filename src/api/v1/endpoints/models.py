@@ -216,9 +216,11 @@ async def get_system_status(
     status = await model_manager.get_status()
     return status
 
+from fastapi import Query
+
 @router.post("/optimize")
 async def optimize_models(
-    target_vram_percentage: float = Field(default=80.0, ge=50.0, le=95.0),
+    target_vram_percentage: float = Query(80.0, ge=50.0, le=95.0),
     model_manager: CustomModelManager = Depends(get_model_manager)
 ):
     """Optimize model loading based on VRAM usage"""

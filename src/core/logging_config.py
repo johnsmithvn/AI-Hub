@@ -9,7 +9,9 @@ from loguru import logger
 from .config import settings
 
 def serialize_record(record):
-    """Serialize log record to JSON"""
+    """Serialize log record to JSON, avoid extra recursion"""
+    # Chỉ lấy các key trong extra không phải 'extra' lồng nhau
+    safe_extra = {k: v for k, v in record["extra"].items() if k != "extra"}
     return json.dumps({
         "timestamp": record["time"].isoformat(),
         "level": record["level"].name,
@@ -17,7 +19,7 @@ def serialize_record(record):
         "function": record["function"],
         "line": record["line"],
         "message": record["message"],
-        "extra": record["extra"]
+        "extra": safe_extra
     })
 
 def setup_logging():
@@ -71,5 +73,3 @@ def setup_logging():
         level="ERROR",
         serialize=True
     )
-    
-    logger.info("✅ Logging configured successfully")

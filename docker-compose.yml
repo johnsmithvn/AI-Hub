@@ -1,96 +1,92 @@
-version: '3.8'
+version: '3.8'  # Phiên bản cấu trúc docker-compose (được giữ lại dù có cảnh báo không cần)
 
 services:
-  # PostgreSQL Database with pgvector
+  # 🗄️ PostgreSQL Database + pgvector cho lưu trữ dữ liệu và embedding
   postgres:
-    image: pgvector/pgvector:pg15
+    image: pgvector/pgvector:pg15  # Image PostgreSQL tích hợp pgvector
     environment:
-      POSTGRES_DB: ai_hub
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ai_hub               # Tên database khởi tạo
+      POSTGRES_USER: postgres           # Username đăng nhập
+      POSTGRES_PASSWORD: password       # Password
     ports:
-      - "5432:5432"
+      - "5432:5432"                      # Mở cổng PostgreSQL ra ngoài (host:container)
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
-    healthcheck:
+      - postgres_data:/var/lib/postgresql/data              # Volume Docker để lưu dữ liệu DB vĩnh viễn
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql  # Script SQL khởi tạo nếu cần
+    healthcheck:  # Kiểm tra tình trạng container postgres để đảm bảo khởi động thành công
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis Cache
+  # ⚡ Redis Cache dùng cho lưu session, conversation tạm
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6379:6379"                      # Expose cổng redis
     volumes:
-      - redis_data:/data
+      - redis_data:/data                # Volume Docker lưu dữ liệu Redis (nếu cần persist)
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # AI Backend Hub Application
+  # 🤖 AI-Hub - backend chính của hệ thống AI
   ai-hub:
-    build: .
+    build: .  # Build từ Dockerfile trong thư mục hiện tại
     ports:
-      - "8000:8000"
+      - "8000:8000"  # Mở cổng API FastAPI ra ngoài (localhost:8000)
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/ai_hub
-      - REDIS_URL=redis://redis:6379/0
-      # ...removed OLLAMA_HOST, no longer needed...
-    volumes:
-      - ./models:/app/models
-      - ./training_data:/app/training_data
-      - ./trained_models:/app/trained_models
-      - ./uploads:/app/uploads
-      - ./logs:/app/logs
-    depends_on:
+      - DATABASE_URL=postgresql+asyncpg://postgres:password@postgres:5432/ai_hub  # Kết nối DB
+      - REDIS_URL=redis://redis:6379/0                                             # Kết nối Redis
+    volumes:  # Mount các thư mục host vào container để lưu data / log / model
+      - ./models:/app/models                      # Thư mục chứa mô hình AI (.gguf, HuggingFace...)
+      - ./training_data:/app/training_data        # Dữ liệu huấn luyện
+      - ./trained_models:/app/trained_models      # Kết quả fine-tune
+      - ./uploads:/app/uploads                    # Upload file từ người dùng
+      - ./logs:/app/logs                          # Ghi log AI
+    depends_on:  # Chờ postgres và redis khởi động và healthy trước
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      # ...removed ollama depends_on, no longer needed...
-    healthcheck:
+    healthcheck:  # Kiểm tra endpoint /health để biết server khởi động OK chưa
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    deploy:
+    deploy:  # Cấu hình để container được phép truy cập GPU
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu]
+              capabilities: [gpu]  # Bắt buộc phải có để dùng CUDA trong container
 
-  # ...Ollama service removed...
-
-  # Prometheus (Optional - for monitoring)
+  # 📊 Prometheus – thu thập số liệu (tùy chọn)
   prometheus:
     image: prom/prometheus:latest
     ports:
-      - "9090:9090"
+      - "9090:9090"  # Truy cập Prometheus UI tại localhost:9090
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
-    command:
+    command:  # Thêm các cờ khi chạy Prometheus
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/etc/prometheus/console_libraries'
       - '--web.console.templates=/etc/prometheus/consoles'
     profiles:
-      - monitoring
+      - monitoring  # Chỉ chạy khi bật profile `monitoring`
 
-  # Grafana (Optional - for monitoring)
+  # 📈 Grafana – Dashboard hiển thị số liệu (tùy chọn)
   grafana:
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - "3000:3000"  # Truy cập Grafana tại localhost:3000
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin  # Mật khẩu admin mặc định
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
@@ -98,13 +94,14 @@ services:
     profiles:
       - monitoring
 
+# 🔗 Volume để lưu trữ dữ liệu vĩnh viễn
 volumes:
-  postgres_data:
-  redis_data:
-  # ...removed ollama_data volume...
-  prometheus_data:
-  grafana_data:
+  postgres_data:   # Volume Docker cho PostgreSQL
+  redis_data:      # Volume Docker cho Redis
+  prometheus_data: # Volume Docker cho Prometheus
+  grafana_data:    # Volume Docker cho Grafana
 
+# 🌐 Mạng dùng chung cho các service
 networks:
   default:
-    name: ai-hub-network
+    name: ai-hub-network  # Tên mạng Docker chung cho các container

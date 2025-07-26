@@ -153,11 +153,13 @@ async def create_training_job(
         logger.error(f"Failed to create training job: {e}")
         raise HTTPException(status_code=500, detail=f"Training job creation failed: {str(e)}")
 
+from fastapi import Query
+
 @router.get("/jobs", response_model=List[TrainingJobStatus])
 async def list_training_jobs(
     status: Optional[str] = None,
-    limit: int = Field(default=20, le=100),
-    offset: int = Field(default=0, ge=0)
+    limit: int = Query(20, le=100),
+    offset: int = Query(0, ge=0)
 ):
     """List training jobs with optional filtering"""
     

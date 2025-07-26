@@ -28,11 +28,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         logger.info(
             f"Request started",
             extra={
-                "request_id": request_id,
-                "method": request.method,
-                "url": str(request.url),
-                "client_ip": request.client.host,
-                "user_agent": request.headers.get("user-agent", ""),
+                "request_info": {
+                    "request_id": request_id,
+                    "method": request.method,
+                    "url": str(request.url),
+                    "client_ip": request.client.host,
+                    "user_agent": request.headers.get("user-agent", ""),
+                }
             }
         )
         
@@ -46,9 +48,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         logger.info(
             f"Request completed",
             extra={
-                "request_id": request_id,
-                "status_code": response.status_code,
-                "duration": duration,
+                "request_info": {
+                    "request_id": request_id,
+                    "status_code": response.status_code,
+                    "duration": duration,
+                }
             }
         )
         
