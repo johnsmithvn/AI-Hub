@@ -23,15 +23,26 @@ from fastapi import APIRouter, HTTPException
 # Disabled placeholder endpoints
 def create_disabled_router(feature_name: str) -> APIRouter:
     """Create a router that returns 'not implemented' responses"""
+
     router = APIRouter()
-    
-    @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+
+    # Generate unique function and operation_id for each feature
     async def not_implemented(path: str):
         raise HTTPException(
-            status_code=501, 
+            status_code=501,
             detail=f"{feature_name} feature is not yet implemented. See _placeholders.py for details."
         )
-    
+
+    # Register each HTTP method with a unique operation_id
+    for method in ["GET", "POST", "PUT", "DELETE"]:
+        router.add_api_route(
+            "/{path:path}",
+            not_implemented,
+            methods=[method],
+            name=f"not_implemented_{feature_name.lower()}_{method.lower()}",
+            operation_id=f"not_implemented_{feature_name.lower()}_{method.lower()}"
+        )
+
     return router
 
 # Create disabled routers
