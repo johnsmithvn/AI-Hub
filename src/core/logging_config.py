@@ -44,7 +44,6 @@ def setup_logging():
         # JSON logging for production
         logger.add(
             sys.stdout,
-            format=serialize_record,
             level=settings.LOG_LEVEL,
             serialize=True
         )
@@ -58,7 +57,6 @@ def setup_logging():
         rotation="1 day",
         retention="30 days",
         compression="zip",
-        format=serialize_record,
         level="INFO",
         serialize=True
     )
@@ -69,7 +67,6 @@ def setup_logging():
         rotation="1 week",
         retention="12 weeks",
         compression="zip",
-        format=serialize_record,
         level="ERROR",
         serialize=True
     )
